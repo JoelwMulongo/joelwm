@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book Recommendation</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --text:#1f2430; --muted:#6b7280; --accent:#4f46e5; --danger:#dc2626; --line:#e5e7eb; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12141a; --card:#1b1e27; --text:#e8eaf0; --muted:#9aa3b2; --line:#2a2f3b; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; } .sub { color:var(--muted); margin:0 0 20px; }
+  .grid { display:grid; gap:16px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:1.05rem; }
+  input, select, button { font:inherit; padding:9px 10px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  form { display:grid; gap:8px; }
+  button { cursor:pointer; background:var(--accent); color:#fff; border:0; }
+  button.ghost { background:transparent; color:var(--danger); border:1px solid var(--line); padding:4px 8px; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  ul { list-style:none; margin:12px 0 0; padding:0; }
+  li { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 0; border-top:1px solid var(--line); }
+  li small { color:var(--muted); display:block; }
+  .tag { font-size:.75rem; background:var(--bg); border:1px solid var(--line); border-radius:999px; padding:2px 8px; margin-right:6px; }
+  #msg { min-height:1.4em; margin:0 0 12px; font-weight:600; } .err { color:var(--danger); } .ok { color:#16a34a; }
+  .empty { color:var(--muted); padding:12px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Book Recommendation</h1>
+  <p class="sub">Add books, search your library, and get recommendations by genre. <a href="/docs">API docs</a></p>
+  <p id="msg" role="status"></p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Add a book</h2>
+      <form id="addForm">
+        <input name="title" placeholder="Title" maxlength="200" required>
+        <input name="author" placeholder="Author" maxlength="120" required>
+        <input name="genre" placeholder="Genre (e.g. Dystopian)" maxlength="60" list="genreList" required>
+        <datalist id="genreList"></datalist>
+        <button type="submit">Add book</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Get recommendations</h2>
+      <div class="row">
+        <select id="recGenre"></select>
+        <button id="recBtn" type="button">Recommend</button>
+      </div>
+      <ul id="recList"></ul>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <h2>Library <span id="count" class="tag"></span></h2>
+    <div class="row">
+      <input id="search" type="search" placeholder="Search title or author">
+      <select id="filterGenre"></select>
+    </div>
+    <ul id="bookList"></ul>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let timer;
+
+function say(text, ok) {
+  const m = $("msg");
+  m.textContent = text || "";
+  m.className = ok ? "ok" : "err";
+  if (ok) setTimeout(() => { if (m.textContent === text) m.textContent = ""; }, 3000);
+}
+
+async function api(path, options) {
+  let res;
+  try { res = await fetch(path, options); }
+  catch { throw new Error("Cannot reach the server. Is it running?"); }
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const d = data && data.detail;
+    throw new Error(Array.isArray(d) ? d.map((e) => e.msg).join("; ") : d || "Request failed (" + res.status + ")");
+  }
+  return data;
+}
+
+function bookItem(b, withDelete) {
+  const li = document.createElement("li");
+  const info = document.createElement("div");
+  const t = document.createElement("strong"); t.textContent = b.title;
+  const s = document.createElement("small"); s.textContent = b.author;
+  const g = document.createElement("span"); g.className = "tag"; g.textContent = b.genre;
+  info.append(t, s);
+  li.append(info, g);
+  if (withDelete) {
+    const del = document.createElement("button");
+    del.className = "ghost"; del.textContent = "Delete";
+    del.onclick = async () => {
+      if (!confirm('Delete "' + b.title + '"?')) return;
+      try { await api("/books/" + b.id, { method: "DELETE" }); say("Book deleted", true); refresh(); }
+      catch (e) { say(e.message); }
+    };
+    li.append(del);
+  }
+  return li;
+}
+
+function fillSelect(sel, genres, firstLabel) {
+  const current = sel.value;
+  sel.replaceChildren();
+  if (firstLabel) sel.append(new Option(firstLabel, ""));
+  genres.forEach((g) => sel.append(new Option(g, g)));
+  if (genres.includes(current)) sel.value = current;
+}
+
+async function loadGenres() {
+  const genres = await api("/genres/");
+  fillSelect($("recGenre"), genres);
+  fillSelect($("filterGenre"), genres, "All genres");
+  $("genreList").replaceChildren(...genres.map((g) => new Option(g)));
+}
+
+async function loadBooks() {
+  const p = new URLSearchParams({ limit: "200" });
+  if ($("search").value.trim()) p.set("q", $("search").value.trim());
+  if ($("filterGenre").value) p.set("genre", $("filterGenre").value);
+  const books = await api("/books/?" + p);
+  $("count").textContent = books.length;
+  const list = $("bookList");
+  list.replaceChildren();
+  if (!books.length) {
+    const e = document.createElement("div"); e.className = "empty";
+    e.textContent = "No books found. Add one above.";
+    list.append(e);
+  } else books.forEach((b) => list.append(bookItem(b, true)));
+}
+
+async function refresh() {
+  try { await loadGenres(); await loadBooks(); } catch (e) { say(e.message); }
+}
+
+$("addForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const body = Object.fromEntries(new FormData(ev.target));
+  try {
+    await api("/books/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    ev.target.reset(); say("Book added", true); refresh();
+  } catch (e) { say(e.message); }
+};
+
+$("recBtn").onclick = async () => {
+  const genre = $("recGenre").value;
+  const list = $("recList"); list.replaceChildren();
+  if (!genre) return say("Add a book first to get recommendations.");
+  try {
+    const books = await api("/recommendations/?limit=5&genre=" + encodeURIComponent(genre));
+    books.forEach((b) => list.append(bookItem(b, false)));
+  } catch (e) { say(e.message); }
+};
+
+$("search").oninput = () => { clearTimeout(timer); timer = setTimeout(() => loadBooks().catch((e) => say(e.message)), 250); };
+$("filterGenre").onchange = () => loadBooks().catch((e) => say(e.message));
+refresh();
+</script>
+</body>
+</html>
