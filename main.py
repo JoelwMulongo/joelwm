@@ -2,7 +2,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
@@ -16,6 +16,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 logger = logging.getLogger("joelwm")
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+SessionDep = Annotated[Session, Depends(get_session)]
 
 
 @asynccontextmanager
@@ -38,8 +40,8 @@ app = FastAPI(
 
 
 def _find_duplicate(
-    session: Session, title: str, author: str, exclude_id: Optional[int] = None
-) -> Optional[Book]:
+    session: Session, title: str, author: str, exclude_id: int | None = None
+) -> Book | None:
     stmt = select(Book).where(
         func.lower(Book.title) == title.lower(),
         func.lower(Book.author) == author.lower(),
@@ -61,13 +63,13 @@ def home():
 
 
 @app.get("/health")
-def health(session: Session = Depends(get_session)):
+def health(session: SessionDep):
     session.exec(select(1)).one()
     return {"status": "ok"}
 
 
 @app.post("/books/", response_model=Book, status_code=status.HTTP_201_CREATED)
-def add_book(payload: BookCreate, session: Session = Depends(get_session)):
+def add_book(payload: BookCreate, session: SessionDep):
     if _find_duplicate(session, payload.title, payload.author):
         raise HTTPException(status_code=409, detail="This book already exists")
     book = Book.model_validate(payload)
@@ -80,11 +82,11 @@ def add_book(payload: BookCreate, session: Session = Depends(get_session)):
 
 @app.get("/books/", response_model=list[Book])
 def list_books(
-    q: Optional[str] = Query(None, description="Search title or author"),
-    genre: Optional[str] = Query(None, description="Filter by genre"),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-    session: Session = Depends(get_session),
+    session: SessionDep,
+    q: Annotated[str | None, Query(description="Search title or author")] = None,
+    genre: Annotated[str | None, Query(description="Filter by genre")] = None,
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ):
     stmt = select(Book)
     if q and q.strip():
@@ -100,7 +102,7 @@ def list_books(
 
 
 @app.get("/books/{book_id}", response_model=Book)
-def get_book(book_id: int, session: Session = Depends(get_session)):
+def get_book(book_id: int, session: SessionDep):
     book = session.get(Book, book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -108,9 +110,7 @@ def get_book(book_id: int, session: Session = Depends(get_session)):
 
 
 @app.patch("/books/{book_id}", response_model=Book)
-def update_book(
-    book_id: int, payload: BookUpdate, session: Session = Depends(get_session)
-):
+def update_book(book_id: int, payload: BookUpdate, session: SessionDep):
     book = session.get(Book, book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -130,7 +130,7 @@ def update_book(
 
 
 @app.delete("/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_book(book_id: int, session: Session = Depends(get_session)):
+def delete_book(book_id: int, session: SessionDep):
     book = session.get(Book, book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -140,15 +140,15 @@ def delete_book(book_id: int, session: Session = Depends(get_session)):
 
 
 @app.get("/genres/", response_model=list[str])
-def list_genres(session: Session = Depends(get_session)):
+def list_genres(session: SessionDep):
     return session.exec(select(Book.genre).distinct().order_by(Book.genre)).all()
 
 
 @app.get("/recommendations/", response_model=list[Book])
 def get_recommendations(
     genre: str,
-    limit: int = Query(5, ge=1, le=50),
-    session: Session = Depends(get_session),
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=50)] = 5,
 ):
     books = session.exec(
         select(Book)

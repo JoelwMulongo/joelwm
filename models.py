@@ -1,5 +1,3 @@
-from typing import Optional
-
 from pydantic import ConfigDict
 from sqlmodel import Field, SQLModel
 
@@ -14,7 +12,7 @@ class BookBase(SQLModel):
 
 
 class Book(BookBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
 
 
 class BookCreate(BookBase):
@@ -26,6 +24,6 @@ class BookUpdate(SQLModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    author: Optional[str] = Field(default=None, min_length=1, max_length=120)
-    genre: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    author: str | None = Field(default=None, min_length=1, max_length=120)
+    genre: str | None = Field(default=None, min_length=1, max_length=60)
